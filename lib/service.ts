@@ -9,6 +9,15 @@ const allocation = (v: unknown): Allocation => { if (!["A","B","Company overhead
 
 async function origin(employee: any, chatId?: string | null) { return chatId ?? employee.telegram_chat_id ?? null; }
 
+async function recordNotification(kind: "sale" | "expense", data: any, status: "sent" | "failed", error: unknown = null) {
+  const table = kind === "sale" ? "sales" : "expenses";
+  const notificationError = error ? String(error).slice(0, 500) : null;
+  await db().from(table).update({ notification_status: status, notification_error: notificationError }).eq("reference", data.reference);
+  const updated = { ...data, notification_status: status, notification_error: notificationError };
+  try { if (kind === "sale") await syncSale(updated); else await syncExpense(updated); }
+  catch (syncError) { await markSyncFailure(table, data.reference, syncError); }
+}
+
 export async function submitSale(slug: string, input: any, chatId?: string | null) {
   const employee = await actor(slug); requireRole(employee, "salesperson");
   const split = validateSplit({ richard: Number(input.richard), anastasia: Number(input.anastasia), jeanClaude: Number(input.jeanClaude) });
@@ -21,7 +30,7 @@ export async function submitSale(slug: string, input: any, chatId?: string | nul
   const { data, error } = await db().from("sales").insert(record).select().single();
   if (error) throw new Error(error.code === "23505" ? "That reference already exists." : error.message);
   try { await syncSale(data); } catch (e) { await markSyncFailure("sales", data.reference, e); }
-  if (data.originating_chat_id) { try { await telegram(data.originating_chat_id, `Sale ${data.reference} recorded: ${money(data.amount_cents)}, project ${data.project}, Pending approval.`); await db().from("sales").update({notification_status:"sent",notification_error:null}).eq("reference",data.reference); } catch(e) { await db().from("sales").update({notification_status:"failed",notification_error:String(e).slice(0,500)}).eq("reference",data.reference); } }
+  if (data.originating_chat_id) { try { await telegram(data.originating_chat_id, `Sale ${data.reference} recorded: ${money(data.amount_cents)}, project ${data.project}, Pending approval.`); await recordNotification("sale",data,"sent"); } catch(e) { await recordNotification("sale",data,"failed",e); } }
   return data as Sale;
 }
 
@@ -37,7 +46,7 @@ export async function submitExpense(slug: string, input: any, chatId?: string | 
   const { data, error } = await db().from("expenses").insert(record).select().single();
   if (error) throw new Error(error.code === "23505" ? "That reference already exists." : error.message);
   try { await syncExpense(data); } catch (e) { await markSyncFailure("expenses", data.reference, e); }
-  if (data.originating_chat_id) { try { await telegram(data.originating_chat_id, `Expense ${data.reference} recorded: ${money(data.amount_cents)}, proposed ${data.proposed_allocation}, ${data.status}.`); await db().from("expenses").update({notification_status:"sent",notification_error:null}).eq("reference",data.reference); } catch(e) { await db().from("expenses").update({notification_status:"failed",notification_error:String(e).slice(0,500)}).eq("reference",data.reference); } }
+  if (data.originating_chat_id) { try { await telegram(data.originating_chat_id, `Expense ${data.reference} recorded: ${money(data.amount_cents)}, proposed ${data.proposed_allocation}, ${data.status}.`); await recordNotification("expense",data,"sent"); } catch(e) { await recordNotification("expense",data,"failed",e); } }
   return data as Expense;
 }
 
@@ -54,7 +63,7 @@ export async function decideSale(slug: string, reference: string, split: Split) 
   try { await syncSale(data); } catch (e) { await markSyncFailure("sales", reference, e); }
   if (data.originating_chat_id) {
     const text = `Sale ${reference} approved${changed ? " — commission split changed" : ""}. Sale ${money(data.amount_cents)}; total commission ${money(c.pool)}. Richard: ${before.proposed_richard_pct}% → ${split.richard}% (${money(c.richard)}). Anastasia: ${before.proposed_anastasia_pct}% → ${split.anastasia}% (${money(c.anastasia)}). Jean-Claude: ${before.proposed_jean_claude_pct}% → ${split.jeanClaude}% (${money(c.jeanClaude)}).`;
-    try { await telegram(data.originating_chat_id,text); await client.from("sales").update({notification_status:"sent",notification_error:null}).eq("reference",reference); } catch (e) { await client.from("sales").update({notification_status:"failed",notification_error:String(e).slice(0,500)}).eq("reference",reference); }
+    try { await telegram(data.originating_chat_id,text); await recordNotification("sale",data,"sent"); } catch (e) { await recordNotification("sale",data,"failed",e); }
   }
   return { record: data, duplicate: false };
 }
@@ -67,7 +76,7 @@ export async function decideExpense(slug: string, reference: string, finalAlloca
   const {data,error}=await client.from("expenses").update({final_allocation:finalAllocation,status:"Allocated",allocated_at:new Date().toISOString(),decision_changed:changed,sheet_sync_status:"pending",notification_status:before.originating_chat_id?"pending":"not_required"}).eq("reference",reference).eq("status","Awaiting allocation").select().maybeSingle();
   if(error) throw new Error(error.message); if(!data){const latest=await client.from("expenses").select("*").eq("reference",reference).single();return{record:latest.data,duplicate:true};}
   try{await syncExpense(data);}catch(e){await markSyncFailure("expenses",reference,e);}
-  if(data.originating_chat_id){const text=`Expense ${reference}${changed?" — allocation changed":""}. ${money(data.amount_cents)}: ${data.description}. Proposed: ${data.proposed_allocation}. Approved: ${data.final_allocation}.`;try{await telegram(data.originating_chat_id,text);await client.from("expenses").update({notification_status:"sent",notification_error:null}).eq("reference",reference);}catch(e){await client.from("expenses").update({notification_status:"failed",notification_error:String(e).slice(0,500)}).eq("reference",reference);}}
+  if(data.originating_chat_id){const text=`Expense ${reference}${changed?" — allocation changed":""}. ${money(data.amount_cents)}: ${data.description}. Proposed: ${data.proposed_allocation}. Approved: ${data.final_allocation}.`;try{await telegram(data.originating_chat_id,text);await recordNotification("expense",data,"sent");}catch(e){await recordNotification("expense",data,"failed",e);}}
   return{record:data,duplicate:false};
 }
 
@@ -77,5 +86,5 @@ export async function retry(slug:string,kind:"sale"|"expense",reference:string,t
   if(target==="sheet"){if(kind==="sale") await syncSale(data); else await syncExpense(data); return data;}
   if(!data.originating_chat_id) throw new Error("No Telegram recipient linked.");
   const text=kind==="sale"?`Sale ${reference} decision: Approved, ${money(data.amount_cents)}; total commission ${money(data.commission_pool_cents)}.`:`Expense ${reference} decision: ${money(data.amount_cents)}, final allocation ${data.final_allocation}.`;
-  await telegram(data.originating_chat_id,text); await db().from(table).update({notification_status:"sent",notification_error:null}).eq("reference",reference); return data;
+  await telegram(data.originating_chat_id,text); await recordNotification(kind,data,"sent"); return data;
 }
