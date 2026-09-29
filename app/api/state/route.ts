@@ -29,5 +29,5 @@ export async function GET(request: Request) {
     ]);
     const error=sales.error||expenses.error||employees.error; if(error) throw error;
     return Response.json({actor:{slug:employee.slug,name:employee.name,role:employee.role},sales:sales.data,expenses:expenses.data,employees:employees.data,dashboard:calculateDashboard(sales.data,expenses.data)});
-  } catch(e){return Response.json({error:e instanceof Error?e.message:String(e)},{status:500});}
+  } catch(e){const message=e instanceof Error?e.message:String(e);return Response.json({error:message},{status:message==="Unknown demonstration role."?400:500});}
 }
