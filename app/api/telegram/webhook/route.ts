@@ -9,7 +9,7 @@ export async function POST(request:Request){
   const chat=String(message.chat.id),user=String(message.from.id),text=String(message.text).trim();
   try{
     const {data:employee}=await db().from("employees").select("*").eq("telegram_user_id",user).maybeSingle();
-    if(!employee){await telegram(chat,"Your Telegram ID is not linked. Ask Svetlana to link it in Manager setup.");return Response.json({ok:true});}
+    if(!employee){await telegram(chat,`Your Telegram ID is ${user}. It is not linked yet. Ask Svetlana to link it in Manager setup.`);return Response.json({ok:true});}
     await db().from("employees").update({telegram_chat_id:chat}).eq("slug",employee.slug);
     if(text==="/start"){await telegram(chat,`Linked as ${employee.name}. Use /help for formats.`);return Response.json({ok:true});}
     if(text==="/help"){await telegram(chat,"Sale: /sale S01 | Customer | A | Description | 1000 | 50/30/20\nExpense: /expense E01 | Description | Materials | 120 | A");return Response.json({ok:true});}
