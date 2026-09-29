@@ -5,7 +5,10 @@ import type { Expense, Sale } from "./types";
 
 function sheetsClient() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  const key = process.env.GOOGLE_PRIVATE_KEY
+    ?.trim()
+    .replace(/^(["'])|(["'])$/g, "")
+    .replace(/\\n/g, "\n");
   if (!email || !key || !process.env.GOOGLE_SHEET_ID) throw new Error("Google Sheets is not configured.");
   const auth = new google.auth.JWT({ email, key, scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
   return google.sheets({ version: "v4", auth });
